@@ -6,6 +6,8 @@ import productsRoutes from "./products.routes.js";
 import ordersRoutes from "./orders.routes.js";
 import reportsRoutes from "./reports.routes.js";
 
+import cartRoutes from "./cart.routes.js";
+
 const routes = Router();
 
 // Rota de Health Check de todos os bancos NoSQL
@@ -50,6 +52,7 @@ routes.get("/health", async (req: Request, res: Response) => {
   res.status(httpStatus).json(status);
 });
 
+routes.use("/cart", cartRoutes);
 routes.use("/products", productsRoutes);
 routes.use("/orders", ordersRoutes);
 routes.use("/reports", reportsRoutes);

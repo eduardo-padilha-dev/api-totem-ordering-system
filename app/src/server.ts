@@ -24,6 +24,7 @@ app.get("/", (req: Request, res: Response) => {
     endpoints: {
       health: "GET /api/health",
       products: "GET /api/products?store_id=<ObjectId>",
+      cart: "GET /api/cart?session_id=<session>&store_id=<ObjectId>",
       orders: "GET /api/orders?store_id=<ObjectId>",
       sales: "GET /api/reports/sales?store_id=<ObjectId>&start=<ISO>&end=<ISO>",
       top_products: "GET /api/reports/top-products?store_id=<ObjectId>&start=<ISO>&end=<ISO>",

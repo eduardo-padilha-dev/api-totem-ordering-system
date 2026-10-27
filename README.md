@@ -60,6 +60,9 @@ Para evitar conflitos com outros programas locais do Ubuntu, utilizamos portas d
 - **Health Check dos 3 Bancos:** [http://localhost:3400/api/health](http://localhost:3400/api/health)
 - **Produtos disponíveis:** `GET /api/products?store_id=<ObjectId>&category_id=<ObjectId>&page=1&limit=20`
 - **Detalhe do produto:** `GET /api/products/:id?store_id=<ObjectId>`
+- **Consultar carrinho:** `GET /api/cart?session_id=<sessao>&store_id=<ObjectId>`
+- **Definir quantidade no carrinho:** `PUT /api/cart/items/:productId?session_id=<sessao>&store_id=<ObjectId>` com JSON `{ "quantity": 2 }`
+- **Remover item do carrinho:** `DELETE /api/cart/items/:productId?session_id=<sessao>&store_id=<ObjectId>`
 - **Fila de preparo:** `GET /api/orders?store_id=<ObjectId>&status=received&page=1&limit=20`
 - **Resumo de vendas:** `GET /api/reports/sales?store_id=<ObjectId>&start=<ISO>&end=<ISO>`
 - **Produtos mais vendidos:** `GET /api/reports/top-products?store_id=<ObjectId>&start=<ISO>&end=<ISO>&limit=10`
