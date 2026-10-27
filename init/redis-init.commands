@@ -1,21 +1,3 @@
-# =============================================================================
-# REDIS INITIALIZATION COMMANDS — GASTROHUB / PROJETO
-# =============================================================================
-# Este arquivo é executado pelo script iniciar.sh ao subir o container do Redis.
-# Os alunos podem adicionar novos comandos (SET, HSET, SADD, ZADD, LPUSH) aqui.
-
-# 1. Configurações globais da aplicação (Estrutura: Hash)
-HSET config:app versao "1.0.0" ambiente "desenvolvimento" taxa_entrega_padrao "5.50" cidade "Guarapuava"
-
-# 2. Conjunto de categorias ativas para validação rápida (Estrutura: Set)
-SADD categorias:ativas "Pizzas" "Japonesa" "Burgers" "Brasileira" "Mexicana"
-
-# 3. Ranking de pratos mais pedidos para a home do app (Estrutura: Sorted Set)
-ZADD ranking:pratos:pedidos 250 "Combo Sashimi"
-ZADD ranking:pratos:pedidos 190 "Pizza Margherita"
-ZADD ranking:pratos:pedidos 140 "Classic Burger"
-ZADD ranking:pratos:pedidos 85 "Prato Feito Mineiro"
-ZADD ranking:pratos:pedidos 60 "Taco de Carne"
-
-# 4. Contador inicial de acessos (Estrutura: String/Integer)
-SET stats:visitas:total 1000
+# Inicialização do Redis — Sistema de Autoatendimento por Totens
+# Adicione aqui somente estruturas necessárias ao domínio do projeto.
+# Cache e dados temporários serão criados pela aplicação conforme o uso.

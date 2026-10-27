@@ -23,7 +23,10 @@ app.get("/", (req: Request, res: Response) => {
     professor: "Prof. Marcelo Vichar",
     endpoints: {
       health: "GET /api/health",
-      itens_simples: "GET /api/itens",
+      products: "GET /api/products?store_id=<ObjectId>",
+      orders: "GET /api/orders?store_id=<ObjectId>",
+      sales: "GET /api/reports/sales?store_id=<ObjectId>&start=<ISO>&end=<ISO>",
+      top_products: "GET /api/reports/top-products?store_id=<ObjectId>&start=<ISO>&end=<ISO>",
     },
     interfaces_web: {
       elasticvue: "http://localhost:8400",
@@ -64,7 +67,7 @@ async function bootstrap() {
     console.log("\n🚀 Servidor Express rodando com sucesso!");
     console.log(`📡 URL Principal: http://localhost:${PORT}`);
     console.log(`🩺 Health Check:  http://localhost:${PORT}/api/health`);
-    console.log(`📦 Simple Coleção: http://localhost:${PORT}/api/itens`);
+    console.log(`📦 Produtos: http://localhost:${PORT}/api/products?store_id=<ObjectId>`);
     console.log("=======================================================\n");
   });
 

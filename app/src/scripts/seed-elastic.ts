@@ -18,34 +18,17 @@ function getElasticInitConfig() {
     }
   }
 
-  // Fallback padrão se não encontrar o arquivo
-  return {
-    settings: { number_of_shards: 1, number_of_replicas: 0 },
-    mappings: {
-      properties: {
-        prato_id: { type: "keyword" },
-        restaurante_id: { type: "keyword" },
-        restaurante_nome: { type: "text" },
-        nome: { type: "text", boost: 3 },
-        descricao: { type: "text", boost: 2 },
-        categoria: { type: "keyword" },
-        preco: { type: "float" },
-        ingredientes: { type: "text" },
-        alergenos: { type: "keyword" },
-        disponivel: { type: "boolean" },
-      },
-    },
-  };
+  throw new Error("Arquivo init/elastic-init.json não encontrado");
 }
 
 export async function seedElasticsearch(keepConnectionsOpen = false) {
-  console.log("[Elasticsearch] Verificando/sincronizando índice 'pratos' a partir de init/elastic-init.json...");
+  console.log("[Elasticsearch] Verificando/sincronizando índice 'products' a partir de init/elastic-init.json...");
 
   await connectMongo();
   await connectElastic();
 
   const elastic = getElasticClient();
-  const indexName = "pratos";
+  const indexName = "products";
   const initConfig = getElasticInitConfig();
 
   // 1. Recria o índice com base no arquivo declarativo init/elastic-init.json
@@ -61,44 +44,33 @@ export async function seedElasticsearch(keepConnectionsOpen = false) {
     mappings: initConfig.mappings,
   });
 
-  // 2. Busca todos os pratos no MongoDB GastroHub
-  const colCardapio = getCollection("cardapio");
-  const colRestaurantes = getCollection("restaurantes");
+  // 2. Carrega o catálogo persistido no MongoDB.
+  const products = await getCollection("products").find().toArray();
 
-  const pratos = await colCardapio.find().toArray();
-  const restaurantes = await colRestaurantes.find().toArray();
-
-  const restMap = new Map<string, string>();
-  for (const r of restaurantes) {
-    restMap.set(r._id.toString(), r.nome);
-  }
-
-  // 3. Indexa prato por prato
+  // 3. Usa o mesmo identificador do MongoDB no índice de busca.
   let count = 0;
-  for (const prato of pratos) {
-    const restNome = prato.restaurante_id ? restMap.get(prato.restaurante_id.toString()) || "Desconhecido" : "Desconhecido";
-
+  for (const product of products) {
     await elastic.index({
       index: indexName,
-      id: prato._id.toString(),
+      id: product._id.toString(),
       document: {
-        prato_id: prato._id.toString(),
-        restaurante_id: prato.restaurante_id ? prato.restaurante_id.toString() : null,
-        restaurante_nome: restNome,
-        nome: prato.nome,
-        descricao: prato.descricao,
-        categoria: prato.categoria,
-        preco: prato.preco,
-        ingredientes: Array.isArray(prato.ingredientes) ? prato.ingredientes.join(", ") : prato.ingredientes,
-        alergenos: prato.alergenos || [],
-        disponivel: prato.disponivel !== false,
+        product_id: product._id.toString(),
+        store_id: product.store_id.toString(),
+        category_id: product.category_id.toString(),
+        name: product.name,
+        description: product.description,
+        price_cents: product.price_cents,
+        ingredients: product.ingredients,
+        tags: product.tags,
+        available: product.available,
+        stock: product.stock,
       },
     });
     count++;
   }
 
   await elastic.indices.refresh({ index: indexName });
-  console.log(`[Elasticsearch] Sucesso! ${count} pratos sincronizados no índice '${indexName}'.`);
+  console.log(`[Elasticsearch] Sucesso! ${count} produtos sincronizados no índice '${indexName}'.`);
 
   if (!keepConnectionsOpen) {
     await closeMongo();

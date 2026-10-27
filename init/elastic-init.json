@@ -5,37 +5,35 @@
   },
   "mappings": {
     "properties": {
-      "prato_id": {
+      "product_id": {
         "type": "keyword"
       },
-      "restaurante_id": {
+      "store_id": {
         "type": "keyword"
       },
-      "restaurante_nome": {
+      "category_id": {
+        "type": "keyword"
+      },
+      "name": {
         "type": "text"
       },
-      "nome": {
-        "type": "text",
-        "boost": 3
-      },
-      "descricao": {
-        "type": "text",
-        "boost": 2
-      },
-      "categoria": {
-        "type": "keyword"
-      },
-      "preco": {
-        "type": "float"
-      },
-      "ingredientes": {
+      "description": {
         "type": "text"
       },
-      "alergenos": {
+      "price_cents": {
+        "type": "integer"
+      },
+      "ingredients": {
+        "type": "text"
+      },
+      "tags": {
         "type": "keyword"
       },
-      "disponivel": {
+      "available": {
         "type": "boolean"
+      },
+      "stock": {
+        "type": "integer"
       }
     }
   }

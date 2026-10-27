@@ -4,7 +4,7 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
-    container_name: nosql_app
+    container_name: api_nosql_app
     ports:
       - "3400:3400"
     environment:
@@ -25,7 +25,7 @@ services:
   # ── MONGODB & MONGO EXPRESS ──────────────────────────────────────────────────
   mongo:
     image: mongo:7
-    container_name: nosql_mongo
+    container_name: api_nosql_mongo
     command: ["mongod", "--config", "/etc/mongod.conf"]
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
@@ -41,7 +41,7 @@ services:
 
   mongo-express:
     image: mongo-express:latest
-    container_name: nosql_mongo_express
+    container_name: api_nosql_mongo_express
     ports:
       - "8401:8081"
     environment:
@@ -56,7 +56,7 @@ services:
   # ── REDIS & REDIS COMMANDER ──────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: nosql_redis
+    container_name: api_nosql_redis
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6334:6379"
@@ -66,7 +66,7 @@ services:
 
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: nosql_redis_commander
+    container_name: api_nosql_redis_commander
     environment:
       - REDIS_HOSTS=local:redis:6379
     ports:
@@ -78,7 +78,7 @@ services:
   # ── ELASTICSEARCH & ELASTICVUE ────────────────────────────────────────────────
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    container_name: nosql_elasticsearch
+    container_name: api_nosql_elasticsearch
     environment:
       - discovery.type=single-node
       - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
@@ -91,7 +91,7 @@ services:
 
   elasticvue:
     image: cars10/elasticvue:latest
-    container_name: nosql_elasticvue
+    container_name: api_nosql_elasticvue
     ports:
       - "8400:8080"
     depends_on:

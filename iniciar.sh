@@ -49,8 +49,8 @@ fi
 if [[ -f "$SCRIPT_DIR/init/redis-init.commands" ]]; then
     echo -e "${CYAN}Carregando estruturas declarativas no Redis (init/redis-init.commands)...${NC}"
     for i in {1..10}; do
-        if docker exec nosql_redis redis-cli ping >/dev/null 2>&1; then
-            docker exec -i nosql_redis redis-cli < "$SCRIPT_DIR/init/redis-init.commands" >/dev/null 2>&1 || true
+        if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+            docker compose exec -T redis redis-cli < "$SCRIPT_DIR/init/redis-init.commands" >/dev/null 2>&1 || true
             break
         fi
         sleep 1
@@ -64,7 +64,7 @@ echo -e "${GREEN}╠════════════════════
 echo -e "║  ${BOLD}APLICAÇÃO NODE/TYPESCRIPT (DOCKER):${NC}                             ║"
 echo -e "║  • API Express (Hot-Reload):       ${CYAN}http://localhost:3400${NC}          ║"
 echo -e "║  • Health Check dos 3 bancos:      ${CYAN}http://localhost:3400/api/health${NC} ║"
-echo -e "║  • Simple Collection (GET):        ${CYAN}http://localhost:3400/api/itens${NC}  ║"
+echo -e "║  • Produtos (GET):                 ${CYAN}http://localhost:3400/api/products?store_id=<ObjectId>${NC}  ║"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════════════╣${NC}"
 echo -e "║  ${BOLD}INTERFACES VISUAIS (WEB):${NC}                                      ║"
 echo -e "║  • ElasticVue (Elasticsearch):     ${CYAN}http://localhost:8400${NC} (Use http://localhost:9234) ║"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# reset.sh — Reseta todos os volumes e restaura o dataset GastroHub de fábrica
+# reset.sh — Reseta todos os volumes e restaura o dataset do sistema de totens de fábrica
 #
 set -e
 
@@ -32,4 +32,4 @@ else
     sudo docker compose up -d
 fi
 
-echo -e "${GREEN}Ambiente resetado com sucesso! O banco GastroHub foi restaurado ao estado original.${NC}"
+echo -e "${GREEN}Ambiente resetado com sucesso! O banco totem_ordering_system foi restaurado ao estado original.${NC}"
