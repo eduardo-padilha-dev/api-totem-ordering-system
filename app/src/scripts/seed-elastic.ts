@@ -19,7 +19,7 @@ function getElasticInitConfig() {
     }
   }
 
-  throw new Error("Arquivo init/elastic-init.json não encontrado");
+  throw new Error("Arquivo init/elastic-init.json não encontrado.");
 }
 
 export async function seedElasticsearch(keepConnectionsOpen = false) {
@@ -73,6 +73,7 @@ export async function seedElasticsearch(keepConnectionsOpen = false) {
 
     await elastic.indices.refresh({ index: indexName });
     console.log(`[Elasticsearch] Sucesso! ${count} produtos sincronizados no índice '${indexName}'.`);
+    return count;
   } finally {
     if (!keepConnectionsOpen) {
       await Promise.all([closeMongo(), closeElastic()]);

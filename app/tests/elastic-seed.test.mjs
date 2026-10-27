@@ -18,7 +18,7 @@ mock.module('../dist/database/mongo.js',{namedExports:{
 mock.module('../dist/database/elastic.js',{namedExports:{connectElastic:async()=>elastic,getElasticClient:()=>elastic,closeElastic:async()=>calls.push('closeElastic')}});
 const {seedElasticsearch}=await import('../dist/scripts/seed-elastic.js');
 test('reconstrói índice com mapping do projeto, IDs originais e refresh',async()=>{
- calls=[];failure=false;await seedElasticsearch();
+ calls=[];failure=false;assert.equal(await seedElasticsearch(), 1);
  const mapping=calls.find(x=>Array.isArray(x)&&x[0]==='mapping')[1];
  assert.equal(mapping.index,'products');assert.equal(mapping.mappings.properties.name.type,'text');assert.equal(mapping.mappings.properties.store_id.type,'keyword');assert(!JSON.stringify(mapping).includes('boost'));
  const doc=calls.find(x=>Array.isArray(x)&&x[0]==='index')[1];assert.equal(doc.id,product._id.toString());assert.equal(doc.document.store_id,product.store_id.toString());assert.equal(doc.document.price_cents,3290);
