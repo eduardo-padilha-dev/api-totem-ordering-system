@@ -12,7 +12,7 @@ O sistema atende clientes em totens de restaurantes e funcionários que consulta
 
 ### Diagrama da arquitetura
 
-O diagrama representa a arquitetura prevista para o Checkpoint 2. As linhas tracejadas indicam fluxos que ainda precisam ser implementados. O acesso ao Elasticsearch para carga inicial é feito pelo script de indexação, usando os produtos do MongoDB.
+O diagrama representa a arquitetura prevista para o Checkpoint 2. O acesso ao Elasticsearch para carga inicial é feito pelo script de indexação, usando os produtos do MongoDB.
 
 ```mermaid
 flowchart LR
@@ -22,8 +22,8 @@ flowchart LR
     API -->|Cache de produtos com TTL| R[(Redis)]
     API -->|Carrinhos temporários| R
     API -->|Busca textual de produtos| E[(Elasticsearch)]
-    API -.->|Após gravar no MongoDB: atualizar índice| E
-    API -.->|Após gravar no MongoDB: invalidar cache| R
+    API -->|Após gravar no MongoDB: atualizar índice| E
+    API -->|Após gravar no MongoDB: invalidar cache| R
     M -->|Leitura de products| S[Script seed-elastic.ts]
     S -->|Carga do índice products| E
 ```
@@ -48,15 +48,15 @@ O cache de produto não é uma entidade independente: é uma cópia descartável
 
 ### Coerência entre os bancos
 
-O fluxo previsto para uma alteração de produto é gravar primeiro no MongoDB, atualizar o documento correspondente no Elasticsearch e invalidar o cache desse produto no Redis. O índice utiliza o mesmo identificador do produto no MongoDB, convertido para texto, permitindo localizar a cópia que deve ser atualizada.
+O fluxo implementado para uma alteração de produto é gravar primeiro no MongoDB, invalidar o cache desse produto no Redis e atualizar o documento correspondente no Elasticsearch. O índice utiliza o mesmo identificador do produto no MongoDB, convertido para texto, permitindo localizar a cópia que deve ser atualizada.
 
-Essa sequência não constitui uma transação atômica entre os três bancos. Se uma atualização da cópia falhar, o dado persistido no MongoDB continua sendo a referência. O tratamento das falhas, a recuperação da sincronização e o prazo de visibilidade das alterações serão implementados e detalhados na Seção 6.
+Essa sequência não constitui uma transação atômica entre os três bancos. Se uma atualização da cópia falhar, o dado persistido no MongoDB continua sendo a referência. O tratamento das falhas, a recuperação da sincronização e o prazo de visibilidade das alterações estão detalhados na Seção 6.
 
 ### Estado atual da implementação
 
 O projeto já possui as quatro coleções MongoDB, as consultas do catálogo, da fila de preparo e dos relatórios, além das conexões com Redis e Elasticsearch. O mapping e o script de carga foram adaptados ao catálogo `products`. A indexação foi validada nos serviços em execução e é executada automaticamente pelo `iniciar.sh`, conforme a Seção 4.
 
-O cache-aside do detalhe do produto está implementado conforme a Seção 2. O carrinho Redis está implementado conforme a Seção 3. A rota de busca está implementada conforme a Seção 5. A escrita com sincronização ainda não está implementada. Esta seção registra a arquitetura a ser concretizada nas próximas etapas e deverá ser atualizada caso alguma dessas decisões mude.
+O cache-aside do detalhe do produto está implementado conforme a Seção 2. O carrinho Redis está implementado conforme a Seção 3. A rota de busca está implementada conforme a Seção 5. A escrita com sincronização está implementada conforme a Seção 6. Esta seção registra a arquitetura implementada e deverá ser atualizada caso alguma dessas decisões mude.
 
 ## Seção 2 — Redis como cache
 
@@ -87,7 +87,7 @@ Respostas 400, 404 e 500 não são armazenadas. O HIT evita a leitura completa d
 
 ### Invalidação
 
-Nesta etapa, a chave deixa de valer automaticamente ao expirar. Ainda não existe uma rota de escrita de produtos; a invalidação explícita será implementada na Seção 6, apagando a chave correspondente após a gravação no MongoDB. Até lá, uma alteração direta no banco pode deixar nome, descrição ou preço antigos no cache por até o restante do TTL. Loja inativa, categoria inativa e produto indisponível ou sem estoque são bloqueados pelas validações anteriores ao cache.
+A chave deixa de valer automaticamente ao expirar. A rota de escrita descrita na Seção 6 invalida explicitamente a chave após gravar no MongoDB. Uma alteração direta no banco, fora dessa rota, pode deixar nome, descrição ou preço antigos no cache por até o restante do TTL. Loja inativa, categoria inativa e produto indisponível ou sem estoque são bloqueados pelas validações anteriores ao cache.
 
 ### Verificação
 
@@ -217,7 +217,7 @@ O comando `./iniciar.sh` realiza a sequência:
 
 Uma falha de prontidão ou indexação interrompe o script. Os containers permanecem disponíveis para inspeção de logs; o script não apaga volumes. Portas ocupadas são reportadas pelo Docker, sem encerrar outros processos. É necessário Docker Compose com suporte a `up --wait`.
 
-Reexecutar `./iniciar.sh` reconstrói o índice a partir do catálogo atual. Reiniciar apenas o container da API não executa o seed. Alterações posteriores no MongoDB ainda não atualizam o índice automaticamente: a escrita sincronizada será implementada na Seção 6.
+Reexecutar `./iniciar.sh` reconstrói o índice a partir do catálogo atual. Reiniciar apenas o container da API não executa o seed. Alterações feitas pelo PATCH da Seção 6 atualizam o índice e invalidam o cache. Alterações diretas no MongoDB continuam exigindo reindexação.
 
 ### Verificação e demonstração
 
@@ -297,7 +297,7 @@ Os resultados são ordenados por `_score` decrescente, com `product_id` crescent
 
 Se o Elasticsearch falhar, inclusive por índice ausente, a rota retorna 503, sem substituir a busca por uma listagem MongoDB. Se o MongoDB falhar na validação do contexto, retorna 500. A busca não utiliza o cache de detalhe do produto.
 
-Loja e categorias são verificadas no MongoDB a cada chamada; nome, descrição, preço, estoque e disponibilidade do produto vêm do índice. Até a implementação da escrita sincronizada na Seção 6, alterações diretas nesses campos no MongoDB exigem reexecutar o seed para aparecerem na busca. A busca não reserva estoque nem substitui a revalidação necessária ao confirmar um pedido.
+Loja e categorias são verificadas no MongoDB a cada chamada; nome, descrição, preço, estoque e disponibilidade do produto vêm do índice. A escrita sincronizada da Seção 6 atualiza o índice; alterações diretas nesses campos no MongoDB, fora da API, exigem reexecutar o seed para aparecerem na busca. A busca não reserva estoque nem substitui a revalidação necessária ao confirmar um pedido.
 
 ### Demonstração e verificação
 
@@ -329,3 +329,104 @@ curl -sG "$SEARCH_URL" --data-urlencode 'q=burger' --data-urlencode "store_id=$S
 ```
 
 As consultas reais nos containers confirmaram busca por nome, descrição, ingrediente e erro de digitação, filtro de categoria, exclusão de produto sem estoque e de produto em categoria inativa, paginação e rejeição de texto vazio. Os testes isolados em `app/tests/product-search.test.mjs` verificam também os pesos, a construção dos filtros, os parâmetros e os erros dos bancos. Execute `cd app && npm test` para a suíte JavaScript e `python3 app/tests/startup.test.py` a partir da raiz para os testes do script de inicialização.
+
+## Seção 6 — Integração e sincronização
+
+### Alteração de produto
+
+A rota `PATCH /api/products/:id?store_id=<ObjectId>` recebe um objeto JSON com um ou mais dos campos abaixo. Campos omitidos são preservados; campos desconhecidos são rejeitados.
+
+| Campo | Regra |
+|---|---|
+| `name` | Texto não vazio de até 200 caracteres, removendo espaços nas extremidades. |
+| `description` | Texto de até 1.000 caracteres; aceita texto vazio. |
+| `price_cents` | Número inteiro entre 0 e 2.147.483.647, persistido como BSON Int32. |
+
+A API valida os identificadores e verifica se a loja está ativa. A atualização MongoDB filtra simultaneamente o produto e sua loja, usando `findOneAndUpdate` com `$set` e `returnDocument: "after"`. Um produto de outra loja não é alterado. A rota pode editar o cadastro de um produto indisponível, sem mudar sua disponibilidade. Não altera estoque, categoria, personalizações ou pedidos históricos. Como as demais rotas acadêmicas do projeto, não possui autenticação.
+
+O fluxo de escrita é:
+
+1. Persistir a alteração no MongoDB e obter a versão atualizada do documento.
+2. Invalidar a chave Redis `totem:product:<store_id>:<product_id>` com `DEL`.
+3. Reindexar a projeção completa no Elasticsearch, usando o mesmo ID do produto e `refresh: "wait_for"`.
+4. Retornar HTTP 200 se os dois destinos forem atualizados; retornar 202 se o produto estiver salvo, mas alguma cópia estiver pendente.
+
+A carga inicial e a escrita utilizam a mesma função `toProductSearchDocument`, em `app/src/database/product-document.ts`, evitando que o seed e a atualização indexem campos diferentes.
+
+### Visibilidade da alteração
+
+**Depois de uma alteração, em quanto tempo a busca e o cache passam a mostrar o dado novo?**
+
+Quando o PATCH retorna **200**, a invalidação Redis já foi concluída e o Elasticsearch já confirmou a visibilidade do documento, pois a chamada aguarda o refresh com `wait_for`. Não há um número fixo de milissegundos: a resposta espera os bancos. Na sequência normal da demonstração, sem operações concorrentes, a próxima busca mostra o dado novo e a primeira leitura do detalhe retorna MISS com o valor atual do MongoDB; a seguinte retorna HIT. Outra leitura pode preencher o cache antes da chamada de demonstração, caso em que ela já será HIT.
+
+A resposta indica o estado dos dois destinos:
+
+```json
+{
+  "data": { "_id": "<product_id>", "name": "Novo nome", "price_cents": 3990 },
+  "synchronization": {
+    "redis": "invalidated",
+    "elasticsearch": "updated"
+  }
+}
+```
+
+O exemplo abrevia `data`; a resposta real contém o documento completo atualizado. A escrita invalida o cache, sem preenchê-lo. O carrinho continua armazenando apenas IDs e quantidades, e os pedidos preservam seus nomes e preços históricos.
+
+### Falhas parciais e recuperação
+
+**O que acontece se a gravação no MongoDB der certo e a atualização do Elasticsearch falhar?**
+
+O MongoDB permanece como fonte da verdade e a alteração não é revertida. A API tenta invalidar o Redis e atualizar o Elasticsearch separadamente, de modo que a falha de um destino não impede a tentativa no outro. Uma sincronização incompleta retorna **202** com o documento salvo, mensagem de recuperação e estado `pending` no destino que falhou:
+
+```json
+{
+  "data": { "_id": "<product_id>", "name": "Novo nome", "price_cents": 3990 },
+  "synchronization": {
+    "redis": "invalidated",
+    "elasticsearch": "pending"
+  },
+  "message": "Product saved in MongoDB; synchronization incomplete. Retry this PATCH with the intended values after the services recover. No automatic retry is scheduled."
+}
+```
+
+Nesse caso, o detalhe pode mostrar o valor novo enquanto a busca ainda mostra a cópia anterior. Não há prazo automático de recuperação da busca: ela depende de uma nova tentativa ou reconstrução do índice. Se a invalidação Redis falhar, a cópia antiga pode permanecer até o restante de seu TTL de 60 segundos. Quando o Redis estiver indisponível, a leitura de detalhe usa o fallback descrito na Seção 2; se uma cópia antiga continuar acessível após recuperação, seu TTL limita sua duração.
+
+Depois de restabelecer os serviços, repita o PATCH com os valores que ainda deseja manter. Como o endpoint define valores absolutos com `$set`, repetir a mesma alteração não soma valores nem duplica produtos; também repete `DEL` e a indexação, mesmo quando os campos MongoDB já têm os valores solicitados. Confirme HTTP 200 e os estados `invalidated` e `updated`. Se outro usuário tiver alterado o produto nesse intervalo, consulte o cadastro e decida os valores pretendidos antes de repetir a escrita.
+
+Também é possível reconstruir todo o índice com `docker compose exec -T app npm run seed:elastic`. Se o índice estiver ausente ou tiver mapping incorreto, use essa reconstrução com o mapping versionado antes de repetir a operação. O seed recupera o Elasticsearch, mas não invalida caches: para recuperar ambos os destinos, repita o PATCH ou aguarde a expiração da chave Redis.
+
+Não há fila de retentativas automática, transação distribuída, versionamento de alterações ou proteção contra reordenação de escritas concorrentes nesta etapa. O HTTP 202 informa uma pendência que requer ação; não significa que um processamento em segundo plano foi agendado. Leituras concorrentes com a invalidação também podem preencher novamente uma cópia antiga, limitada pelo TTL. Os resultados de visibilidade demonstrados referem-se à sequência de comandos sem alterações concorrentes.
+
+IDs e corpo inválidos retornam 400; loja inativa/inexistente ou produto fora da loja retornam 404. Se uma operação MongoDB falhar, a API retorna 500 e não altera Redis ou Elasticsearch. Em uma falha de transporte na escrita, o cliente pode não saber se o MongoDB confirmou a operação antes da falha; consulte o produto ou repita os valores desejados para recuperar a sincronização.
+
+### Demonstração
+
+Use os IDs reais de uma loja e de um produto elegível; salve nome, descrição e preço anteriores para restaurá-los ao terminar.
+
+```bash
+STORE_ID='<store_id>'
+PRODUCT_ID='<product_id>'
+DETAIL_URL="http://localhost:3400/api/products/$PRODUCT_ID?store_id=$STORE_ID"
+
+# Ler duas vezes, com chave inicialmente ausente: MISS e HIT.
+curl -i "$DETAIL_URL"
+curl -i "$DETAIL_URL"
+
+# HTTP 200; synchronization.redis: invalidated e elasticsearch: updated.
+curl -i -X PATCH "$DETAIL_URL" -H 'Content-Type: application/json' \
+  -d '{"name":"Burger Demonstração CP2","description":"Produto atualizado no checkpoint","price_cents":3990}'
+
+# Após o PATCH, a busca já retorna o nome e o preço novos.
+curl -sG 'http://localhost:3400/api/products/search' \
+  --data-urlencode 'q=Burger Demonstração CP2' --data-urlencode "store_id=$STORE_ID"
+
+# MISS e corpo com nome e preço atualizados; na próxima leitura, HIT.
+curl -i "$DETAIL_URL"
+curl -i "$DETAIL_URL"
+
+# Restaurar os três valores originais usando o mesmo PATCH.
+# Esse passo também invalida o cache e atualiza o índice novamente.
+```
+
+Os testes isolados em `app/tests/product-update.test.mjs` cobrem validação, projeção indexada, refresh, falhas MongoDB/Redis/Elasticsearch e recuperação de HTTP 202 para 200 pela repetição da alteração. A validação com serviços reais confirmou cache HIT → PATCH 200 → cache MISS, preço BSON Int32 e busca com nome e preço atualizados. Em uma instância temporária com volumes novos e sem portas publicadas, o Elasticsearch foi parado: a API retornou 202, preservou a alteração MongoDB e invalidou o cache. Após reiniciar o Elasticsearch, repetir o PATCH retornou 200 e recuperou a busca. O produto foi restaurado aos valores originais. O teste isolado não interrompeu o outro ambiente que já ocupava as portas do projeto.

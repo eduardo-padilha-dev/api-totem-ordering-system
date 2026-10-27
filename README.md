@@ -59,6 +59,7 @@ Para evitar conflitos com outros programas locais do Ubuntu, utilizamos portas d
 
 - **Health Check dos 3 Bancos:** [http://localhost:3400/api/health](http://localhost:3400/api/health)
 - **Produtos disponíveis:** `GET /api/products?store_id=<ObjectId>&category_id=<ObjectId>&page=1&limit=20`
+- **Alterar produto:** `PATCH /api/products/:id?store_id=<ObjectId>` com JSON contendo `name`, `description` e/ou `price_cents`; HTTP 202 indica sincronização pendente e exige nova tentativa após recuperação dos serviços.
 - **Busca textual:** `GET /api/products/search?q=burguer&store_id=<ObjectId>&category_id=<ObjectId>&page=1&limit=20` (categoria opcional)
 - **Detalhe do produto:** `GET /api/products/:id?store_id=<ObjectId>`
 - **Consultar carrinho:** `GET /api/cart?session_id=<sessao>&store_id=<ObjectId>`
@@ -122,7 +123,7 @@ init/
    - Executado automaticamente na primeira inicialização do container.
 2. **Elasticsearch (`init/elastic-init.json`):**
    - Defina os `mappings` e `properties` do seu índice para buscas por relevância e filtros.
-   - Aplicado pelo script `seed:elastic`, chamado automaticamente pelo `./iniciar.sh` após a prontidão dos serviços. O índice `products` é reconstruído a partir do MongoDB a cada execução; alterações posteriores serão tratadas pela integração da API.
+   - Aplicado pelo script `seed:elastic`, chamado automaticamente pelo `./iniciar.sh` após a prontidão dos serviços. O índice `products` é reconstruído a partir do MongoDB a cada execução; alterações pelo PATCH de produto atualizam o índice e invalidam o cache.
 3. **Redis (`init/redis-init.commands`):**
    - Escreva seus comandos Redis (`HSET`, `SADD`, `ZADD`, `SET`) para criar chaves, configurações e rankings iniciais.
    - Executado automaticamente pelo script `./iniciar.sh`.

@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
+import { toProductSearchDocument } from "../database/product-document.js";
 import { connectMongo, getCollection, closeMongo } from "../database/mongo.js";
 import { connectElastic, getElasticClient, closeElastic } from "../database/elastic.js";
 
@@ -55,18 +56,7 @@ export async function seedElasticsearch(keepConnectionsOpen = false) {
       await elastic.index({
         index: indexName,
         id: product._id.toString(),
-        document: {
-          product_id: product._id.toString(),
-          store_id: product.store_id.toString(),
-          category_id: product.category_id.toString(),
-          name: product.name,
-          description: product.description,
-          price_cents: product.price_cents,
-          ingredients: product.ingredients,
-          tags: product.tags,
-          available: product.available,
-          stock: product.stock,
-        },
+        document: toProductSearchDocument(product),
       });
       count++;
     }
