@@ -54,7 +54,7 @@ Essa sequência não constitui uma transação atômica entre os três bancos. S
 
 ### Estado atual da implementação
 
-O projeto já possui as quatro coleções MongoDB, as consultas do catálogo, da fila de preparo e dos relatórios, além das conexões com Redis e Elasticsearch. O mapping e o script de carga foram adaptados ao catálogo `products`, mas a indexação ainda precisa ser validada com os serviços em execução e incorporada ao `iniciar.sh`.
+O projeto já possui as quatro coleções MongoDB, as consultas do catálogo, da fila de preparo e dos relatórios, além das conexões com Redis e Elasticsearch. O mapping e o script de carga foram adaptados ao catálogo `products`. A indexação foi validada nos serviços em execução e é executada automaticamente pelo `iniciar.sh`, conforme a Seção 4.
 
 O cache-aside do detalhe do produto está implementado conforme a Seção 2. O carrinho Redis está implementado conforme a Seção 3. Rota de busca e escrita com sincronização ainda não estão implementadas. Esta seção registra a arquitetura a ser concretizada nas próximas etapas e deverá ser atualizada caso alguma dessas decisões mude.
 
@@ -176,3 +176,66 @@ curl -s "$CART_URL?$CART_QUERY"
 ```
 
 A demonstração com quantidades 2 e 3 exige um produto com pelo menos três unidades em estoque. Os testes reais nos containers confirmaram o tipo Hash, a substituição da quantidade, o TTL de 1.800 segundos, a ausência de renovação em GET, a renovação em PUT e a exclusão da chave ao remover o último item. Os testes isolados adicionais são executados por `cd app && npm test`.
+
+## Seção 4 — Elasticsearch: mapping e indexação
+
+### Índice e tipos dos campos
+
+O índice `products` recebe uma projeção do catálogo MongoDB. Seu mapping é versionado em `init/elastic-init.json`, sem o parâmetro `boost`. Pesos de relevância serão definidos na consulta da Seção 5, sem alterar o mapping.
+
+| Campos | Tipo Elasticsearch | Justificativa |
+|---|---|---|
+| `product_id`, `store_id`, `category_id` | `keyword` | Identificadores precisam de correspondência exata, sem divisão em palavras. Os ObjectIds do MongoDB são convertidos para texto hexadecimal. |
+| `name`, `description`, `ingredients` | `text` | São textos pesquisáveis por palavras e relevância. Usam o analisador `standard` padrão do Elasticsearch; cada ingrediente continua sendo um elemento do array. |
+| `tags` | `keyword` | Marcadores do catálogo são valores completos, usados para filtros exatos. |
+| `price_cents` | `integer` | Preserva o valor inteiro em centavos, compatível com o catálogo, sem conversão para ponto flutuante. |
+| `stock` | `integer` | Representa a quantidade disponível e permite filtros numéricos. |
+| `available` | `boolean` | Permite filtrar a disponibilidade definida pela loja. |
+
+O índice utiliza um shard primário e zero réplicas, adequado ao ambiente acadêmico com um único nó. Essa configuração não oferece redundância. Informações nutricionais, grupos de personalização e pedidos não são indexados neste recorte: permanecem no MongoDB e são consultados pelas rotas correspondentes.
+
+### Carga do MongoDB para o Elasticsearch
+
+O script `app/src/scripts/seed-elastic.ts`, executado por `npm run seed:elastic`, conecta aos dois bancos, lê o mapping e recria o índice `products`. Em seguida, lê a coleção MongoDB `products` e indexa cada documento com `_id` igual ao identificador original convertido para texto. Os campos indexados são os listados na tabela acima.
+
+São carregados todos os produtos, inclusive indisponíveis e sem estoque. Assim, o índice contém uma projeção completa do catálogo; a rota de busca deverá aplicar filtros de elegibilidade e validar o contexto da loja e da categoria na Seção 5. A indexação inicial não transforma o Elasticsearch na fonte da verdade.
+
+Ao terminar a carga, o script executa um refresh explícito para tornar os documentos pesquisáveis antes de informar sucesso. As conexões são fechadas em um bloco `finally`, inclusive se a criação do índice ou alguma indexação falhar. Um erro encerra o comando com código diferente de zero.
+
+O seed faz uma reconstrução completa: se o índice já existir, ele é apagado e criado novamente com o mapping versionado. Isso evita documentos antigos e duplicação após nova carga. Durante a reconstrução, a busca fica temporariamente indisponível; uma falha pode deixar o índice incompleto. A recuperação nesta etapa é repetir o seed a partir do MongoDB, que não é alterado pelo processo. Não há troca de índices sem interrupção nem snapshot transacional: alterações concorrentes no catálogo durante a carga não são cobertas por esta rotina de desenvolvimento.
+
+### Inicialização automática
+
+O comando `./iniciar.sh` realiza a sequência:
+
+1. Seleciona o acesso ao Docker disponível no ambiente, mantendo a mesma forma de acesso em todas as etapas.
+2. Executa `docker compose up -d --build --remove-orphans --wait --wait-timeout 180`.
+3. Aguarda os health checks dos bancos; a API depende de MongoDB, Redis e Elasticsearch saudáveis antes de iniciar. A verificação MongoDB usa o endereço do serviço, evitando considerar pronto o servidor temporário de inicialização que só atende em loopback.
+4. Executa os comandos opcionais de `init/redis-init.commands`, ignorando comentários e linhas vazias.
+5. Executa `docker compose exec -T app npm run seed:elastic`.
+6. Só apresenta a mensagem de ambiente pronto quando as etapas anteriores terminam com sucesso.
+
+Uma falha de prontidão ou indexação interrompe o script. Os containers permanecem disponíveis para inspeção de logs; o script não apaga volumes. Portas ocupadas são reportadas pelo Docker, sem encerrar outros processos. É necessário Docker Compose com suporte a `up --wait`.
+
+Reexecutar `./iniciar.sh` reconstrói o índice a partir do catálogo atual. Reiniciar apenas o container da API não executa o seed. Alterações posteriores no MongoDB ainda não atualizam o índice automaticamente: a escrita sincronizada será implementada na Seção 6.
+
+### Verificação e demonstração
+
+```bash
+# Sobe os serviços e cria/carrega o índice sem passos manuais adicionais.
+./iniciar.sh
+
+# Exibe o mapping descrito nesta seção.
+curl -s 'http://localhost:9234/products/_mapping?pretty'
+
+# No dataset inicial, retorna count: 12.
+curl -s 'http://localhost:9234/products/_count?pretty'
+
+# Permite comparar os IDs e os campos indexados com o catálogo MongoDB.
+curl -s 'http://localhost:9234/products/_search?size=20&pretty'
+
+# Reconstrução manual, caso seja necessário recuperar uma carga com falha.
+docker compose exec -T app npm run seed:elastic
+```
+
+A execução nos containers confirmou 12 produtos no MongoDB e 12 documentos no Elasticsearch, com igualdade de todos os campos projetados e os mesmos IDs. O health check da API retornou HTTP 200. Os testes isolados cobrem o mapping aplicado, a projeção, o refresh e a liberação de conexões em caso de falha; testes do script verificam a ordem de execução e que falhas não anunciam ambiente pronto. A validação desta etapa preservou os volumes existentes; o ensaio completo a partir de um clone com volumes novos permanece para a validação final da entrega.

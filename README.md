@@ -35,7 +35,7 @@ Para subir todos os bancos, interfaces web **E** a aplicação Node/TypeScript j
 ```
 
 > [!NOTE]
-> O script `./iniciar.sh` possui um mecanismo que **libera automaticamente as portas antes de iniciar**, evitando qualquer erro de conflito de portas com outros serviços no Ubuntu.
+> O script `./iniciar.sh` aguarda a prontidão dos bancos e da API e reconstrói o índice de busca automaticamente. Requer Docker Compose com suporte a `up --wait`. Se uma porta estiver ocupada, o Docker informa o conflito; o script não encerra outros processos.
 
 ---
 
@@ -121,7 +121,7 @@ init/
    - Executado automaticamente na primeira inicialização do container.
 2. **Elasticsearch (`init/elastic-init.json`):**
    - Defina os `mappings` e `properties` do seu índice para buscas por relevância e filtros.
-   - Sincronizado automaticamente pela aplicação ao iniciar.
+   - Aplicado pelo script `seed:elastic`, chamado automaticamente pelo `./iniciar.sh` após a prontidão dos serviços. O índice `products` é reconstruído a partir do MongoDB a cada execução; alterações posteriores serão tratadas pela integração da API.
 3. **Redis (`init/redis-init.commands`):**
    - Escreva seus comandos Redis (`HSET`, `SADD`, `ZADD`, `SET`) para criar chaves, configurações e rankings iniciais.
    - Executado automaticamente pelo script `./iniciar.sh`.
