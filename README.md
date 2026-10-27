@@ -55,6 +55,12 @@ Para evitar conflitos com outros programas locais do Ubuntu, utilizamos portas d
 
 ---
 
+## Demonstração do Checkpoint 2
+
+O [roteiro completo na Seção 7 de CHECKPOINT_2.md](CHECKPOINT_2.md#seção-7--roteiro-de-demonstração) contém os comandos em ordem e as saídas esperadas para cache, carrinho, busca e sincronização. Execute os blocos no mesmo terminal; o roteiro descobre os IDs reais e restaura o produto utilizado ao final.
+
+---
+
 ## 📡 Endpoints Prontos para Testar
 
 - **Health Check dos 3 Bancos:** [http://localhost:3400/api/health](http://localhost:3400/api/health)

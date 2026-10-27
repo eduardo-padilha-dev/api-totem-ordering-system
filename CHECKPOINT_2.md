@@ -12,7 +12,7 @@ O sistema atende clientes em totens de restaurantes e funcionários que consulta
 
 ### Diagrama da arquitetura
 
-O diagrama representa a arquitetura prevista para o Checkpoint 2. O acesso ao Elasticsearch para carga inicial é feito pelo script de indexação, usando os produtos do MongoDB.
+O diagrama representa a arquitetura implementada para o Checkpoint 2. O acesso ao Elasticsearch para carga inicial é feito pelo script de indexação, usando os produtos do MongoDB.
 
 ```mermaid
 flowchart LR
@@ -430,3 +430,226 @@ curl -i "$DETAIL_URL"
 ```
 
 Os testes isolados em `app/tests/product-update.test.mjs` cobrem validação, projeção indexada, refresh, falhas MongoDB/Redis/Elasticsearch e recuperação de HTTP 202 para 200 pela repetição da alteração. A validação com serviços reais confirmou cache HIT → PATCH 200 → cache MISS, preço BSON Int32 e busca com nome e preço atualizados. Em uma instância temporária com volumes novos e sem portas publicadas, o Elasticsearch foi parado: a API retornou 202, preservou a alteração MongoDB e invalidou o cache. Após reiniciar o Elasticsearch, repetir o PATCH retornou 200 e recuperou a busca. O produto foi restaurado aos valores originais. O teste isolado não interrompeu o outro ambiente que já ocupava as portas do projeto.
+
+## Seção 7 — Roteiro de demonstração
+
+Execute os blocos abaixo **na ordem, no mesmo terminal Bash, a partir da raiz do repositório**. O roteiro usa o dataset inicial, descobre os ObjectIds reais e restaura o produto no final. Requer Docker com Compose e `curl`; não exige Node.js instalado no host. Não faça alterações concorrentes no produto escolhido durante a demonstração.
+
+Os corpos completos das respostas incluem outros campos documentados nas seções anteriores. As saídas esperadas abaixo destacam os campos que comprovam cada requisito; IDs, timestamp, score e TTL restante variam entre execuções.
+
+### 7.1. Inicialização e saúde dos três bancos
+
+```bash
+# Esperado: serviços saudáveis, 12 produtos indexados e mensagem de ambiente pronto.
+./iniciar.sh
+
+BASE_URL="${BASE_URL:-http://localhost:3400}"
+
+# Esperado: HTTP 200, status_geral "OK" e os três bancos com status "ONLINE".
+curl -sS -i "$BASE_URL/api/health"
+```
+
+O início não exige comandos manuais de criação do índice. Se alguma porta já estiver sendo usada por outro projeto, libere o conflito antes de executar o ambiente; o script não encerra outros processos.
+
+### 7.2. Identificadores reais e preparação
+
+```bash
+# Esperado: quatro ObjectIds, obtidos das coleções do dataset inicial.
+read -r STORE_ID PRODUCT_ID CATEGORY_ID BEVERAGES_ID < <(
+  docker compose exec -T mongo mongosh --quiet -u root -p root \
+    --authenticationDatabase admin totem_ordering_system --eval '
+      const store = db.stores.findOne({name: "Estação do Lanche — Centro", active: true});
+      if (!store) throw new Error("Loja do dataset inicial não encontrada");
+      const product = db.products.findOne({store_id: store._id, name: "Big Burger Bacon"});
+      const beverages = db.categories.findOne({name: "Bebidas", active: true});
+      if (!product || !beverages) throw new Error("Catálogo do dataset inicial não encontrado");
+      print([store._id, product._id, product.category_id, beverages._id].map(String).join(" "));
+    '
+)
+printf 'Loja: %s\nProduto: %s\nCategoria: %s\nBebidas: %s\n' \
+  "$STORE_ID" "$PRODUCT_ID" "$CATEGORY_ID" "$BEVERAGES_ID"
+
+DETAIL_URL="$BASE_URL/api/products/$PRODUCT_ID?store_id=$STORE_ID"
+SEARCH_URL="$BASE_URL/api/products/search"
+CACHE_KEY="totem:product:$STORE_ID:$PRODUCT_ID"
+SESSION_ID="demo-cp2-$(date +%s)-$$"
+CART_URL="$BASE_URL/api/cart"
+CART_QUERY="session_id=$SESSION_ID&store_id=$STORE_ID"
+
+# Esperado: JSON com nome, descrição e preço originais para posterior restauração.
+ORIGINAL_PRODUCT=$(docker compose exec -T -e DEMO_PRODUCT_ID="$PRODUCT_ID" mongo \
+  mongosh --quiet -u root -p root --authenticationDatabase admin \
+  totem_ordering_system --eval '
+    const p = db.products.findOne({_id: ObjectId(process.env.DEMO_PRODUCT_ID)});
+    print(JSON.stringify({name: p.name, description: p.description, price_cents: p.price_cents}));
+  ')
+printf '%s\n' "$ORIGINAL_PRODUCT"
+
+# Restauração de segurança se a demonstração for interrompida ou o terminal sair.
+# A execução normal também restaura explicitamente no item 7.7.
+restore_demo() {
+  curl -fsS -X PATCH "$DETAIL_URL" -H 'Content-Type: application/json' \
+    -d "$ORIGINAL_PRODUCT" >/dev/null || true
+  docker compose exec -T redis redis-cli DEL "totem:cart:$SESSION_ID" >/dev/null || true
+}
+trap restore_demo EXIT
+
+# Esperado: 0 ou 1. Remove somente a cópia cacheada deste produto para garantir MISS.
+docker compose exec -T redis redis-cli DEL "$CACHE_KEY"
+```
+
+No dataset inicial, o produto selecionado tem nome `Big Burger Bacon`, preço `3290` centavos e estoque suficiente para as quantidades do roteiro. A sessão de carrinho é exclusiva desta execução. A restauração de segurança depende de os serviços continuarem acessíveis; se ela falhar, use o JSON salvo em `ORIGINAL_PRODUCT` para repetir o PATCH quando os serviços voltarem.
+
+### 7.3. Cache: primeira leitura MISS, segunda HIT
+
+```bash
+# Esperado: HTTP 200, X-Cache: MISS, data.name "Big Burger Bacon" e price_cents 3290.
+curl -sS -i "$DETAIL_URL"
+
+# Esperado: HTTP 200, X-Cache: HIT e o mesmo corpo JSON da primeira leitura.
+curl -sS -i "$DETAIL_URL"
+
+# Esperado: TTL positivo de até 60 segundos, se executado logo após as leituras.
+docker compose exec -T redis redis-cli TTL "$CACHE_KEY"
+```
+
+Execute as duas leituras em menos de 60 segundos. O HIT reaproveita o detalhe, mantendo as validações de loja, produto e categoria no MongoDB.
+
+### 7.4. Hash Redis aplicado ao carrinho
+
+```bash
+# Esperado: HTTP 200 e data.items vazio, pois a sessão é nova.
+curl -sS -i "$CART_URL?$CART_QUERY"
+
+# Esperado: HTTP 200, IDs da sessão/loja/produto e data.quantity 2.
+curl -sS -i -X PUT "$CART_URL/items/$PRODUCT_ID?$CART_QUERY" \
+  -H 'Content-Type: application/json' -d '{"quantity":2}'
+
+# Esperado: HTTP 200 e um item com product_id igual a PRODUCT_ID e quantity 2.
+curl -sS -i "$CART_URL?$CART_QUERY"
+
+# Esperado: "hash".
+docker compose exec -T redis redis-cli TYPE "totem:cart:$SESSION_ID"
+
+# Esperado: campo store_id com STORE_ID e campo item:<PRODUCT_ID> com valor "2".
+docker compose exec -T redis redis-cli HGETALL "totem:cart:$SESSION_ID"
+
+# Esperado: TTL positivo de até 1800 segundos.
+docker compose exec -T redis redis-cli TTL "totem:cart:$SESSION_ID"
+
+# Esperado: HTTP 200 e data.quantity 3; a operação substitui, não soma.
+curl -sS -i -X PUT "$CART_URL/items/$PRODUCT_ID?$CART_QUERY" \
+  -H 'Content-Type: application/json' -d '{"quantity":3}'
+
+# Esperado: HTTP 200 e o único item com quantity 3.
+curl -sS -i "$CART_URL?$CART_QUERY"
+```
+
+### 7.5. Busca textual, erro de digitação e filtro exato
+
+```bash
+# Esperado: HTTP 200, total 1 e Big Burger Bacon; score positivo.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=burger' \
+  --data-urlencode "store_id=$STORE_ID"
+
+# Esperado: HTTP 200, total 1 e o mesmo produto, apesar da grafia "burguer".
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=burguer' \
+  --data-urlencode "store_id=$STORE_ID"
+
+# Esperado: HTTP 200, total 1 e Big Burger Bacon, por um termo da descrição.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=artesanal' \
+  --data-urlencode "store_id=$STORE_ID"
+
+# Esperado: HTTP 200, total 1 e Batata Rústica, por um ingrediente.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=alecrim' \
+  --data-urlencode "store_id=$STORE_ID"
+
+# Esperado: HTTP 200, total 1 e Big Burger Bacon dentro de sua categoria.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=burger' \
+  --data-urlencode "store_id=$STORE_ID" --data-urlencode "category_id=$CATEGORY_ID"
+
+# Esperado: HTTP 200, total 0 e data vazio, pois o burger não pertence a Bebidas.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=burger' \
+  --data-urlencode "store_id=$STORE_ID" --data-urlencode "category_id=$BEVERAGES_ID"
+```
+
+### 7.6. Escrita MongoDB, invalidação Redis e atualização Elasticsearch
+
+```bash
+# Esperado: HTTP 200, novo nome/preço em data e synchronization com
+# redis "invalidated" e elasticsearch "updated".
+curl -sS -i -X PATCH "$DETAIL_URL" -H 'Content-Type: application/json' \
+  -d '{"name":"Burger Demonstracao Checkpoint","description":"Produto atualizado para demonstrar os tres bancos","price_cents":3990}'
+
+# Esperado: 0, comprovando que a chave foi invalidada e não preenchida pelo PATCH.
+docker compose exec -T redis redis-cli EXISTS "$CACHE_KEY"
+
+# Esperado: HTTP 200, total 1, mesmo product_id e price_cents 3990.
+# A busca já enxerga a alteração porque o PATCH aguardou o refresh do índice.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=Burger Demonstracao Checkpoint' \
+  --data-urlencode "store_id=$STORE_ID"
+
+# Esperado: HTTP 200, X-Cache: MISS e os novos nome, descrição e preço.
+curl -sS -i "$DETAIL_URL"
+
+# Esperado: HTTP 200, X-Cache: HIT e o mesmo corpo atualizado.
+curl -sS -i "$DETAIL_URL"
+```
+
+O PATCH precisa retornar 200 para comprovar a sincronização completa. Se retornar 202, o MongoDB já foi alterado, mas algum destino está pendente: siga a recuperação da Seção 6 e repita o PATCH antes de continuar a demonstração.
+
+### 7.7. Restauração e limpeza dos dados da demonstração
+
+```bash
+# Esperado: HTTP 200 e nome, descrição e preço originais, com ambas as cópias sincronizadas.
+curl -sS -i -X PATCH "$DETAIL_URL" -H 'Content-Type: application/json' \
+  -d "$ORIGINAL_PRODUCT"
+
+# Esperado: HTTP 200, X-Cache: MISS e Big Burger Bacon com price_cents 3290.
+curl -sS -i "$DETAIL_URL"
+
+# Esperado: HTTP 200, total 1 e o produto original novamente pesquisável.
+curl -sS -i -G "$SEARCH_URL" --data-urlencode 'q=burger' \
+  --data-urlencode "store_id=$STORE_ID"
+
+# Esperado: HTTP 200 e data.quantity 0.
+curl -sS -i -X DELETE "$CART_URL/items/$PRODUCT_ID?$CART_QUERY"
+
+# Esperado: HTTP 200 e data.items vazio.
+curl -sS -i "$CART_URL?$CART_QUERY"
+
+# Esperado: 0, pois remover o último item apaga o Hash inteiro.
+docker compose exec -T redis redis-cli EXISTS "totem:cart:$SESSION_ID"
+
+# Remove a restauração automática após concluir a limpeza com sucesso.
+trap - EXIT
+```
+
+### 7.8. Conferência da entrega
+
+A branch avaliada é `main`. O repositório deve conter `CHECKPOINT_2.md`, o mapping em `init/elastic-init.json`, o seed, os controllers e rotas e o `iniciar.sh`. Não é necessário enviar um ZIP ou este documento como PDF: no Moodle devem ser informados o link do repositório e os integrantes.
+
+Para conferir o código local e o estado dos arquivos antes de publicar:
+
+```bash
+# Esperado: compilação e testes JavaScript aprovados. Requer Node.js 22.3+ no host.
+(cd app && npm test)
+
+# Esperado: quatro testes aprovados. Requer Python 3 no host.
+python3 app/tests/startup.test.py
+
+# Esperado: nenhuma marca de conflito ou erro de whitespace.
+git diff --check
+
+# Esperado: conferir conscientemente alterações ainda não commitadas e a branch main.
+git status --short
+git branch --show-current
+```
+
+As ferramentas Node.js e Python acima são necessárias apenas para esses testes de desenvolvimento; o roteiro funcional 7.1–7.7 usa a aplicação conteinerizada. Não apague volumes com dados de trabalho para simular uma máquina limpa: a validação pode utilizar um projeto Compose temporário, com volumes próprios.
+
+### Validação executada deste roteiro
+
+O roteiro funcional foi executado a partir de um clone local do código da branch `main`, usando um projeto Compose temporário com volumes novos. Para preservar outro ambiente nas portas padrão, o teste publicou apenas a API em `127.0.0.1:13400` e definiu `BASE_URL` para esse endereço; o código da aplicação e os comandos de demonstração foram mantidos. A inicialização usou o próprio `./iniciar.sh` do clone e criou o índice com os 12 produtos iniciais.
+
+As 23 chamadas HTTP retornaram 200. Foram conferidos os cabeçalhos MISS/HIT, os corpos JSON, o tipo Hash e o TTL Redis, buscas por nome/descrição/ingrediente, erro de digitação, filtro exato, invalidação do cache, atualização da busca e restauração do nome, descrição e preço originais. O fluxo foi repetido sem reinicializar os bancos e produziu novamente os resultados esperados. Ao final, o carrinho da sessão foi removido. Os recursos Docker temporários foram removidos após os testes, preservando o ambiente original.
