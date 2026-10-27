@@ -429,7 +429,7 @@ A documentação cobre a proposta de modelagem. Para concluir o checkpoint execu
 - [x] Testar filtros por loja, categorias inativas, produtos indisponíveis, paginação, ausência de resultados e parâmetros inválidos.
 - [x] Conferir os relatórios manualmente com os pedidos do povoamento, incluindo exclusão de cancelados e limites de datas.
 - [ ] Garantir código e documentação funcionais na branch `main`, que será avaliada pelo professor.
-- [ ] Informar no formulário do Moodle o link do repositório e os integrantes, conforme a especificação.
+- [ ] Informar no formulário do Moodle o link do repositório e os integrantes, conforme a especificação..
 
 ### Contrato atual da API
 
