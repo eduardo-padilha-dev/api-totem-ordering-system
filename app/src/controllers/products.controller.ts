@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import { Request, Response } from "express";
 import { getDb } from "../database/mongo.js";
+import { cacheGet, cacheSet } from "../database/redis.js";
 
 export async function listProducts(req: Request, res: Response): Promise<void> 
 {
@@ -143,43 +144,64 @@ export async function getProduct(
       return;
     }
 
-    const product = await db.collection("products").findOne(
-      {
-        _id: new ObjectId(productId),
-        store_id: new ObjectId(storeId),
-        available: true,
-        stock: { $gt: 0 }
-      },
-      {
-        projection: {
-          _id: 1,
-          name: 1,
-          description: 1,
-          price_cents: 1,
-          category_id: 1,
-          ingredients: 1,
-          tags: 1,
-          nutrition: 1,
-          customization_groups: 1
-        }
-      }
+    const productFilter = {
+      _id: new ObjectId(productId),
+      store_id: new ObjectId(storeId),
+      available: true,
+      stock: { $gt: 0 }
+    };
+    // Revalida elegibilidade mesmo quando existe uma resposta em cache.
+    const eligibility = await db.collection("products").findOne(
+      productFilter,
+      { projection: { _id: 1, category_id: 1 } }
     );
-
-    if (!product) {
+    if (!eligibility) {
       res.status(404).json({ error: "Product not found" });
       return;
     }
-
-    const category = await db.collection("categories").findOne({
-      _id: product.category_id,
-      active: true
-    });
-
+    const category = await db.collection("categories").findOne(
+      { _id: eligibility.category_id, active: true },
+      { projection: { _id: 1 } }
+    );
     if (!category) {
       res.status(404).json({ error: "Product not found" });
       return;
     }
 
+    const cacheKey = `totem:product:${productFilter.store_id.toHexString()}:${productFilter._id.toHexString()}`;
+    let cacheStatus = "MISS";
+    try {
+      const cached = await cacheGet<Record<string, unknown>>(cacheKey);
+      if (cached !== null) {
+        res.setHeader("X-Cache", "HIT");
+        res.json({ data: cached });
+        return;
+      }
+    } catch (error) {
+      console.warn("[Redis] Cache de produto indisponível na leitura:", error);
+      cacheStatus = "BYPASS";
+    }
+
+    const product = await db.collection("products").findOne(productFilter, {
+      projection: {
+        _id: 1, name: 1, description: 1, price_cents: 1, category_id: 1,
+        ingredients: 1, tags: 1, nutrition: 1, customization_groups: 1
+      }
+    });
+    if (!product) {
+      res.status(404).json({ error: "Product not found" });
+      return;
+    }
+
+    if (cacheStatus !== "BYPASS") {
+      try {
+        await cacheSet(cacheKey, product, 60);
+      } catch (error) {
+        console.warn("[Redis] Cache de produto indisponível na gravação:", error);
+        cacheStatus = "BYPASS";
+      }
+    }
+    res.setHeader("X-Cache", cacheStatus);
     res.json({ data: product });
   } catch (error) {
     console.error(error);
