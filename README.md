@@ -59,6 +59,7 @@ Para evitar conflitos com outros programas locais do Ubuntu, utilizamos portas d
 
 - **Health Check dos 3 Bancos:** [http://localhost:3400/api/health](http://localhost:3400/api/health)
 - **Produtos disponíveis:** `GET /api/products?store_id=<ObjectId>&category_id=<ObjectId>&page=1&limit=20`
+- **Busca textual:** `GET /api/products/search?q=burguer&store_id=<ObjectId>&category_id=<ObjectId>&page=1&limit=20` (categoria opcional)
 - **Detalhe do produto:** `GET /api/products/:id?store_id=<ObjectId>`
 - **Consultar carrinho:** `GET /api/cart?session_id=<sessao>&store_id=<ObjectId>`
 - **Definir quantidade no carrinho:** `PUT /api/cart/items/:productId?session_id=<sessao>&store_id=<ObjectId>` com JSON `{ "quantity": 2 }`

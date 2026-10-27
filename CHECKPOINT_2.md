@@ -21,7 +21,7 @@ flowchart LR
     API -->|Consultas e persistência| M[(MongoDB)]
     API -->|Cache de produtos com TTL| R[(Redis)]
     API -->|Carrinhos temporários| R
-    API -.->|Busca textual de produtos| E[(Elasticsearch)]
+    API -->|Busca textual de produtos| E[(Elasticsearch)]
     API -.->|Após gravar no MongoDB: atualizar índice| E
     API -.->|Após gravar no MongoDB: invalidar cache| R
     M -->|Leitura de products| S[Script seed-elastic.ts]
@@ -56,7 +56,7 @@ Essa sequência não constitui uma transação atômica entre os três bancos. S
 
 O projeto já possui as quatro coleções MongoDB, as consultas do catálogo, da fila de preparo e dos relatórios, além das conexões com Redis e Elasticsearch. O mapping e o script de carga foram adaptados ao catálogo `products`. A indexação foi validada nos serviços em execução e é executada automaticamente pelo `iniciar.sh`, conforme a Seção 4.
 
-O cache-aside do detalhe do produto está implementado conforme a Seção 2. O carrinho Redis está implementado conforme a Seção 3. Rota de busca e escrita com sincronização ainda não estão implementadas. Esta seção registra a arquitetura a ser concretizada nas próximas etapas e deverá ser atualizada caso alguma dessas decisões mude.
+O cache-aside do detalhe do produto está implementado conforme a Seção 2. O carrinho Redis está implementado conforme a Seção 3. A rota de busca está implementada conforme a Seção 5. A escrita com sincronização ainda não está implementada. Esta seção registra a arquitetura a ser concretizada nas próximas etapas e deverá ser atualizada caso alguma dessas decisões mude.
 
 ## Seção 2 — Redis como cache
 
@@ -198,7 +198,7 @@ O índice utiliza um shard primário e zero réplicas, adequado ao ambiente acad
 
 O script `app/src/scripts/seed-elastic.ts`, executado por `npm run seed:elastic`, conecta aos dois bancos, lê o mapping e recria o índice `products`. Em seguida, lê a coleção MongoDB `products` e indexa cada documento com `_id` igual ao identificador original convertido para texto. Os campos indexados são os listados na tabela acima.
 
-São carregados todos os produtos, inclusive indisponíveis e sem estoque. Assim, o índice contém uma projeção completa do catálogo; a rota de busca deverá aplicar filtros de elegibilidade e validar o contexto da loja e da categoria na Seção 5. A indexação inicial não transforma o Elasticsearch na fonte da verdade.
+São carregados todos os produtos, inclusive indisponíveis e sem estoque. Assim, o índice contém uma projeção completa do catálogo; a rota de busca aplica filtros de elegibilidade e valida o contexto da loja e da categoria conforme a Seção 5. A indexação inicial não transforma o Elasticsearch na fonte da verdade.
 
 Ao terminar a carga, o script executa um refresh explícito para tornar os documentos pesquisáveis antes de informar sucesso. As conexões são fechadas em um bloco `finally`, inclusive se a criação do índice ou alguma indexação falhar. Um erro encerra o comando com código diferente de zero.
 
@@ -239,3 +239,93 @@ docker compose exec -T app npm run seed:elastic
 ```
 
 A execução nos containers confirmou 12 produtos no MongoDB e 12 documentos no Elasticsearch, com igualdade de todos os campos projetados e os mesmos IDs. O health check da API retornou HTTP 200. Os testes isolados cobrem o mapping aplicado, a projeção, o refresh e a liberação de conexões em caso de falha; testes do script verificam a ordem de execução e que falhas não anunciam ambiente pronto. A validação desta etapa preservou os volumes existentes; o ensaio completo a partir de um clone com volumes novos permanece para a validação final da entrega.
+
+## Seção 5 — Elasticsearch: busca
+
+### Rota e parâmetros
+
+A rota `GET /api/products/search` recebe o texto digitado pelo cliente e consulta o índice `products`. Ela é registrada antes de `/api/products/:id`, para que `search` não seja interpretado como identificador de produto.
+
+| Parâmetro de query | Regra |
+|---|---|
+| `q` | Obrigatório, texto de 1 a 200 caracteres após remover espaços nas extremidades. |
+| `store_id` | Obrigatório, ObjectId de uma loja ativa. |
+| `category_id` | Opcional, ObjectId para restringir os resultados a uma categoria ativa. |
+| `page` | Inteiro positivo, padrão 1. |
+| `limit` | Inteiro entre 1 e 100, padrão 20. |
+
+A paginação usa `from` e `size` e é limitada à janela de 10.000 resultados do índice. Parâmetros inválidos retornam 400; uma loja inexistente ou inativa retorna 404. Categoria inexistente ou inativa retorna uma lista vazia. Uma busca válida sem correspondências retorna HTTP 200 com `data: []` e `total: 0`.
+
+### Busca textual e pesos
+
+A consulta usa `multi_match` com `name^3`, `description^2` e `ingredients` (peso 1). O nome recebe maior peso por identificar diretamente o produto; a descrição recebe peso intermediário por detalhar o que ele oferece; ingredientes ampliam as possibilidades de descoberta sem superar, apenas pelo peso, a importância do nome. O score também depende de fatores como frequência e raridade dos termos, portanto os pesos não garantem uma proporção fixa entre os scores finais.
+
+`fuzziness: "AUTO"` permite pequenas diferenças entre o texto informado e os termos indexados. Por exemplo, `burguer` encontra o produto `Big Burger Bacon`. A quantidade tolerada de alterações depende do comprimento do termo. Isso não equivale a busca por sinônimos nem garante correção de qualquer erro.
+
+A consulta usa o tipo padrão `best_fields`, com `operator: "and"`: em buscas com várias palavras, todos os termos devem corresponder dentro de um dos campos pesquisados, considerando a tolerância a erros. Não se trata de autocomplete ou correspondência literal de frase. Os campos textuais continuam usando o analisador `standard` descrito na Seção 4.
+
+### Filtros e ordenação
+
+Antes da busca, o MongoDB valida a loja ativa e fornece os IDs das categorias ativas. O Elasticsearch recebe os critérios abaixo dentro de `bool.filter`, sem aumentar o score de relevância:
+
+```json
+{
+  "bool": {
+    "must": [{
+      "multi_match": {
+        "query": "burguer",
+        "fields": ["name^3", "description^2", "ingredients"],
+        "fuzziness": "AUTO",
+        "operator": "and"
+      }
+    }],
+    "filter": [
+      { "term": { "store_id": "<store_id>" } },
+      { "term": { "available": true } },
+      { "range": { "stock": { "gt": 0 } } },
+      { "terms": { "category_id": ["<id_categoria_ativa>"] } }
+    ]
+  }
+}
+```
+
+Quando `category_id` é informado, a lista de categorias do filtro contém apenas esse ID, se ele estiver ativo. Quando não há categorias elegíveis, a API retorna uma lista vazia sem consultar o Elasticsearch. Os filtros por IDs utilizam os campos `keyword`, preservando correspondência exata e o isolamento dos resultados por loja.
+
+Os resultados são ordenados por `_score` decrescente, com `product_id` crescente para desempate. A resposta tem o formato `{ "data": [...], "total": 1, "page": 1, "limit": 20 }`. Cada item contém os campos projetados no índice e `score`; o identificador é `product_id`. `total` representa todas as correspondências após os filtros, antes da paginação, usando `track_total_hits: true`.
+
+### Falhas e atualização dos dados
+
+Se o Elasticsearch falhar, inclusive por índice ausente, a rota retorna 503, sem substituir a busca por uma listagem MongoDB. Se o MongoDB falhar na validação do contexto, retorna 500. A busca não utiliza o cache de detalhe do produto.
+
+Loja e categorias são verificadas no MongoDB a cada chamada; nome, descrição, preço, estoque e disponibilidade do produto vêm do índice. Até a implementação da escrita sincronizada na Seção 6, alterações diretas nesses campos no MongoDB exigem reexecutar o seed para aparecerem na busca. A busca não reserva estoque nem substitui a revalidação necessária ao confirmar um pedido.
+
+### Demonstração e verificação
+
+Use o ID da loja **Estação do Lanche — Centro** e IDs reais das categorias:
+
+```bash
+STORE_ID='<store_id_centro>'
+LANCHES_ID='<category_id_lanches>'
+BEBIDAS_ID='<category_id_bebidas>'
+SEARCH_URL='http://localhost:3400/api/products/search'
+
+# Nome: encontra Big Burger Bacon na loja selecionada.
+curl -sG "$SEARCH_URL" --data-urlencode 'q=burger' --data-urlencode "store_id=$STORE_ID"
+
+# Erro de digitação: também encontra Big Burger Bacon.
+curl -sG "$SEARCH_URL" --data-urlencode 'q=burguer' --data-urlencode "store_id=$STORE_ID"
+
+# Descrição: encontra Big Burger Bacon pelo termo da descrição.
+curl -sG "$SEARCH_URL" --data-urlencode 'q=artesanal' --data-urlencode "store_id=$STORE_ID"
+
+# Ingrediente: encontra Batata Rústica, cujo array inclui Alecrim.
+curl -sG "$SEARCH_URL" --data-urlencode 'q=alecrim' --data-urlencode "store_id=$STORE_ID"
+
+# Filtro exato: encontra o burger na categoria Lanches.
+curl -sG "$SEARCH_URL" --data-urlencode 'q=burger' --data-urlencode "store_id=$STORE_ID" --data-urlencode "category_id=$LANCHES_ID"
+
+# Filtro exato: data vazio e total 0 ao restringir o burger a Bebidas.
+curl -sG "$SEARCH_URL" --data-urlencode 'q=burger' --data-urlencode "store_id=$STORE_ID" --data-urlencode "category_id=$BEBIDAS_ID"
+```
+
+As consultas reais nos containers confirmaram busca por nome, descrição, ingrediente e erro de digitação, filtro de categoria, exclusão de produto sem estoque e de produto em categoria inativa, paginação e rejeição de texto vazio. Os testes isolados em `app/tests/product-search.test.mjs` verificam também os pesos, a construção dos filtros, os parâmetros e os erros dos bancos. Execute `cd app && npm test` para a suíte JavaScript e `python3 app/tests/startup.test.py` a partir da raiz para os testes do script de inicialização.

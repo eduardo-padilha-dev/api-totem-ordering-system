@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "test": "npm run build && node --experimental-test-module-mocks tests/product-cache.test.mjs && node --experimental-test-module-mocks tests/cart.test.mjs && node --experimental-test-module-mocks tests/elastic-seed.test.mjs",
+    "test": "npm run build && node --experimental-test-module-mocks tests/product-cache.test.mjs && node --experimental-test-module-mocks tests/cart.test.mjs && node --experimental-test-module-mocks tests/elastic-seed.test.mjs && node --experimental-test-module-mocks tests/product-search.test.mjs",
     "start": "node dist/server.js",
     "seed:elastic": "tsx src/scripts/seed-elastic.ts"
   },
